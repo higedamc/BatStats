@@ -2,4 +2,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   build:
-    uses: mlm-games/ci/.github/workflows/android-ci.yml@v1
+    # Pinned to a commit rather than the mutable `v1` tag: this reusable workflow lives in a
+    # third-party repository and runs inside this one, so a force-moved tag would change what
+    # executes here without any change landing in this repo.
+    uses: mlm-games/ci/.github/workflows/android-ci.yml@2a5a9b9db66f38d446d20952d73eaea99d57e004

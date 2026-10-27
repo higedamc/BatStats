@@ -3,6 +3,7 @@ package app.batstats.battery.data
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 import app.batstats.battery.data.db.BatteryDatabase
 import app.batstats.battery.data.db.BatterySample
 import app.batstats.battery.data.db.ChargeSession
@@ -12,6 +13,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
 
@@ -91,65 +94,115 @@ class ExportImportManager(
     suspend fun importJson(src: Uri): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val input = context.contentResolver.openInputStream(src) ?: return@withContext false
-            val payload = input.use { json.decodeFromString(BatteryExport.serializer(), it.readBytes().toString(Charsets.UTF_8)) }
+            val bytes = input.use { readBounded(it) } ?: return@withContext false
+            val payload = json.decodeFromString(BatteryExport.serializer(), bytes.toString(Charsets.UTF_8))
 
-            val bd = db.batteryDao()
-            val sd = db.sessionDao()
-
-            payload.samples.forEach { bd.insertSample(it.copy(id = 0)) }
-            payload.sessions.forEach { sd.upsert(it) }
+            // One transaction: a file that parses but fails partway through cannot leave a
+            // half-imported history behind.
+            db.withTransaction {
+                val bd = db.batteryDao()
+                val sd = db.sessionDao()
+                payload.samples.forEach { bd.insertSample(it.copy(id = 0)) }
+                payload.sessions.forEach { sd.upsert(it) }
+            }
             true
         }.getOrElse { false }
+    }
+
+    /**
+     * Reads at most [MAX_IMPORT_BYTES]. The import source is a file the user picks, which may be
+     * handed over by another app; reading it whole and unbounded turns that pick into an
+     * out-of-memory kill.
+     */
+    private fun readBounded(input: InputStream): ByteArray? {
+        val sink = ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (sink.size() + read > MAX_IMPORT_BYTES) return null
+            sink.write(buffer, 0, read)
+        }
+        return sink.toByteArray()
     }
 
     suspend fun importCsv(src: Uri): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             context.contentResolver.openInputStream(src)?.use { ins ->
                 val reader = BufferedReader(InputStreamReader(ins, StandardCharsets.UTF_8))
-                val header = reader.readLine() ?: return@use
+                val header = reader.readLine() ?: return@withContext false
 
+                // Rows are parsed before anything is written, and a row that does not have the
+                // expected shape is skipped instead of aborting the import with part of the file
+                // already committed.
                 if (header.contains("timestamp,levelPercent")) {
-                    val bd = db.batteryDao()
-                    reader.lineSequence().forEach { line ->
-                        if (line.isBlank()) return@forEach
-                        val p = line.split(',')
-                        val s = BatterySample(
-                            timestamp = p[0].toLong(),
-                            levelPercent = p[1].ifBlank { null }?.toInt(),
-                            status = p[2].toInt(),
-                            plugged = p[3].toInt(),
-                            currentNowUa = p[4].ifBlank { null }?.toLong(),
-                            chargeCounterUah = p[5].ifBlank { null }?.toLong(),
-                            voltageMv = p[6].ifBlank { null }?.toInt(),
-                            temperatureDeciC = p[7].ifBlank { null }?.toInt(),
-                            health = p[8].ifBlank { null }?.toInt(),
-                            screenOn = p[9].toBooleanStrictOrNull() ?: false
-                        )
-                        bd.insertSample(s)
+                    val samples = reader.lineSequence()
+                        .filter { it.isNotBlank() }
+                        .mapNotNull { parseSample(it) }
+                        .toList()
+                    if (samples.isEmpty()) return@withContext false
+                    db.withTransaction {
+                        val bd = db.batteryDao()
+                        samples.forEach { bd.insertSample(it) }
                     }
                 } else if (header.contains("sessionId,type")) {
-                    val sd = db.sessionDao()
-                    reader.lineSequence().forEach { line ->
-                        if (line.isBlank()) return@forEach
-                        val p = line.split(',')
-                        val s = ChargeSession(
-                            sessionId = p[0],
-                            type = enumValueOf(p[1]),
-                            startTime = p[2].toLong(),
-                            endTime = p[3].ifBlank { null }?.toLong(),
-                            startLevel = p[4].toInt(),
-                            endLevel = p[5].ifBlank { null }?.toInt(),
-                            deltaUah = p[6].ifBlank { null }?.toLong(),
-                            avgCurrentUa = p[7].ifBlank { null }?.toLong(),
-                            estCapacityMah = p[8].ifBlank { null }?.toInt()
-                        )
-                        sd.upsert(s)
+                    val sessions = reader.lineSequence()
+                        .filter { it.isNotBlank() }
+                        .mapNotNull { parseSession(it) }
+                        .toList()
+                    if (sessions.isEmpty()) return@withContext false
+                    db.withTransaction {
+                        val sd = db.sessionDao()
+                        sessions.forEach { sd.upsert(it) }
                     }
                 } else {
                     return@withContext false
                 }
-            }
+            } ?: return@withContext false
             true
         }.getOrElse { false }
+    }
+
+    private fun parseSample(line: String): BatterySample? {
+        val p = line.split(',')
+        if (p.size < SAMPLE_COLUMNS) return null
+        return runCatching {
+            BatterySample(
+                timestamp = p[0].toLong(),
+                levelPercent = p[1].ifBlank { null }?.toInt(),
+                status = p[2].toInt(),
+                plugged = p[3].toInt(),
+                currentNowUa = p[4].ifBlank { null }?.toLong(),
+                chargeCounterUah = p[5].ifBlank { null }?.toLong(),
+                voltageMv = p[6].ifBlank { null }?.toInt(),
+                temperatureDeciC = p[7].ifBlank { null }?.toInt(),
+                health = p[8].ifBlank { null }?.toInt(),
+                screenOn = p[9].toBooleanStrictOrNull() ?: false
+            )
+        }.getOrNull()
+    }
+
+    private fun parseSession(line: String): ChargeSession? {
+        val p = line.split(',')
+        if (p.size < SESSION_COLUMNS) return null
+        return runCatching {
+            ChargeSession(
+                sessionId = p[0],
+                type = enumValueOf(p[1]),
+                startTime = p[2].toLong(),
+                endTime = p[3].ifBlank { null }?.toLong(),
+                startLevel = p[4].toInt(),
+                endLevel = p[5].ifBlank { null }?.toInt(),
+                deltaUah = p[6].ifBlank { null }?.toLong(),
+                avgCurrentUa = p[7].ifBlank { null }?.toLong(),
+                estCapacityMah = p[8].ifBlank { null }?.toInt()
+            )
+        }.getOrNull()
+    }
+
+    private companion object {
+        const val MAX_IMPORT_BYTES = 32 * 1024 * 1024
+        const val SAMPLE_COLUMNS = 10
+        const val SESSION_COLUMNS = 9
     }
 }

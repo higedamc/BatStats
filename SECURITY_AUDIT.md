@@ -48,6 +48,13 @@ process that spawned the service, and commands are matched exactly against an al
 five read-only diagnostic commands the app actually uses. A leaked binder handle is now worth no
 more than the battery dumps its holder could request on their own.
 
+The allow-list is the gate that bounds the damage, and it is unconditional. The uid pin is
+secondary and depends on Shizuku instantiating the service through its `Context` constructor: if
+it uses the no-argument one instead, the app's own uid cannot be resolved in that process and the
+uid check defers to the allow-list rather than locking the app out. Which constructor Shizuku
+picks has not been confirmed on a device, so treat the uid pin as best-effort and the allow-list
+as the control.
+
 ### 2. Battery history was uploaded to cloud backup — Medium (privacy)
 
 `app/src/main/AndroidManifest.xml`, `app/src/main/res/xml/*`
@@ -100,6 +107,10 @@ PRs.
 to (`2a5a9b9`), and by deleting both `android.yml` (an upstream Play Store release path that needs
 secrets this fork does not and should not hold) and `dependabot-auto-merge.yml`. Dependabot itself
 is left enabled; its PRs now simply require a human.
+
+Pinning stops the contents from changing silently; it does not vouch for them. The reusable
+workflow at that commit was not reviewed, and it may well use mutable refs of its own internally.
+What the pin buys is that any future change has to be an explicit commit in this repository.
 
 ### 5. v1 JAR signing enabled at minSdk 26 — Low
 

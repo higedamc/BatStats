@@ -1,19 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The battery database is a fine grained behavioural record: per-app energy buckets, screen-on
+  intervals and charge sessions. It is kept out of cloud backup so that history never leaves the
+  device through Google's backup transport. Device-to-device transfer is left untouched, so a user
+  migrating phones keeps their history; the in-app JSON/CSV export remains the explicit way to
+  copy it anywhere else.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="database" path="battery.db" />
+        <exclude domain="database" path="battery.db-wal" />
+        <exclude domain="database" path="battery.db-shm" />
+        <exclude domain="database" path="battery.db-journal" />
     </cloud-backup>
-    <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
-    -->
 </data-extraction-rules>

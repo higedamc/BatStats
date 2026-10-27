@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import androidx.core.content.ContextCompat
 import app.batstats.battery.data.db.BatteryDatabase
 import app.batstats.battery.data.db.BatterySample
 import app.batstats.battery.data.db.ChargeSession
@@ -107,9 +108,16 @@ class BatteryRepository(
         if (_isMonitoring.value) return
         _isMonitoring.value = true
 
-        // Register Receiver for system broadcasts (plug/unplug, % change)
+        // Register Receiver for system broadcasts (plug/unplug, % change).
+        // Explicitly not exported: ACTION_BATTERY_CHANGED only ever arrives from the system, so
+        // nothing is lost, and a sibling app can no longer address this receiver directly.
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        context.registerReceiver(batteryReceiver, filter)
+        ContextCompat.registerReceiver(
+            context,
+            batteryReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         // Start Polling Coroutine for current/voltage fluctuations
         // Android's ACTION_BATTERY_CHANGED is "sticky" but doesn't fire often enough

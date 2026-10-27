@@ -16,6 +16,8 @@
     <application
         android:name=".battery.BatteryApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="BatStats"
         android:supportsRtl="true"
         android:icon="@mipmap/ic_launcher"

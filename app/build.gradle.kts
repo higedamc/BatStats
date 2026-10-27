@@ -64,9 +64,12 @@ android {
             storePassword = System.getenv("STORE_PASSWORD")
             keyAlias = System.getenv("KEY_ALIAS")
             keyPassword = System.getenv("KEY_PASSWORD")
-            enableV1Signing = true
+            // minSdk is 26, so v1 (JAR) signing is never needed to install and only keeps the
+            // APK in the shape CVE-2017-13156 (Janus) exploits. v3 is enabled so the signing key
+            // can be rotated without orphaning installs.
+            enableV1Signing = false
             enableV2Signing = true
-            enableV3Signing = false
+            enableV3Signing = true
             enableV4Signing = false
         }
     }
